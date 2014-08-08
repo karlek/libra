@@ -124,7 +124,7 @@ func update(buf audio.PCM32Samples, dec audio.Decoder) error {
 	oldx, oldy := 0, height/2
 	for x := 0; x < width; x += 4 {
 		// loudness from the frame scaled down to the image.
-		loudness := int(buf[x*xscale]) / yscale
+		loudness := int(buf[x*xscale]) / (yscale + 1)
 
 		// To center the oscilloscope on the y axis we add height/2.
 		y := loudness + height/2
