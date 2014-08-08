@@ -15,6 +15,7 @@ import (
 	"azul3d.org/audio.v1"
 	_ "azul3d.org/audio/wav.v1"
 	"code.google.com/p/draw2d/draw2d"
+	_ "github.com/mewkiz/audio/flac"
 	"github.com/mewkiz/pkg/errutil"
 	sdlaudio "github.com/mewmew/sdl/audio"
 	"github.com/mewmew/sdl/win"
