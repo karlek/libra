@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"image"
@@ -11,18 +12,20 @@ import (
 	"runtime"
 	"time"
 
+	"azul3d.org/audio.v1"
+	_ "azul3d.org/audio/wav.v1"
 	"code.google.com/p/draw2d/draw2d"
 	"github.com/mewkiz/pkg/errutil"
-	"github.com/mewmew/sdl/audio"
+	sdlaudio "github.com/mewmew/sdl/audio"
 	"github.com/mewmew/sdl/win"
 	"github.com/mewmew/we"
-	snd "github.com/mkb218/gosndfile/sndfile"
 )
 
 const (
 	// TODO(karlek): make width and height into flags.
-	width, height = 320, 200
-	fps           = 60
+	width, height = 600, 400
+
+	fps = 60
 )
 
 var (
@@ -31,7 +34,7 @@ var (
 
 func play(filename string) {
 	// Load the sound file.
-	s, err := audio.Open(filename)
+	s, err := sdlaudio.Open(filename)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -54,72 +57,71 @@ func oscilloscope(filename string) (err error) {
 	}
 	defer win.Close()
 
-	// Info about the sound, number of samples, sample rate etc.
-	info := snd.Info{}
-
-	// snd.Read is the read flag.
-	f, err := snd.Open(filename, snd.Read, &info)
+	f, err := os.Open(filename)
 	if err != nil {
-		return errutil.Err(err)
+		return err
 	}
 	defer f.Close()
+	br := bufio.NewReader(f)
 
-	fmt.Printf("%#v\n", info)
+	dec, magic, err := audio.NewDecoder(br)
+	if err != nil {
+		return err
+	}
+	fmt.Println("magic:", magic)
+
+	// Info about the sound, number of samples, sample rate etc.
+	conf := dec.Config()
+	fmt.Println(conf)
 
 	// Play the music.
 	go play(filename)
 
-	// Create a new image with black background.
-	i := image.NewRGBA(image.Rect(0, 0, width, height))
+	nsamples := conf.Channels * conf.SampleRate
+	buf := make(audio.PCM32Samples, nsamples/fps)
 
 	// Update and event loop.
 	for {
-		err := update(info.Channels*info.Samplerate/fps, i, f)
+		err := update(buf, dec)
 		if err != nil {
 			return errutil.Err(err)
 		}
 
 		// Poll events until the event queue is empty.
-		// Only neccessary for closing the window.
 		for e := win.PollEvent(); e != nil; e = win.PollEvent() {
 			switch e.(type) {
 			case we.Close:
 				os.Exit(0)
 			}
 		}
-		time.Sleep(time.Second / fps)
+		time.Sleep(time.Second / (fps * 2))
 	}
 	return nil
 }
 
-func update(samplerate int32, i *image.RGBA, f *snd.File) error {
-	// frames holds 1 second of frames, the number of frames depends on the
-	// sample rate.
-	frames := make([]int32, samplerate)
-
-	// For a sound file with only one channel, a frame is the same as a item (ie
-	// a single sample) while for multi channel sound files, a single frame
-	// contains a single item for each channel.
-	read, err := f.ReadFrames(frames)
+func update(buf audio.PCM32Samples, dec audio.Decoder) error {
+	n, err := dec.Read(buf)
 	if err != nil {
-		return errutil.Err(err)
+		return err
 	}
-	// when 0 frames are read, it means we've reached EOF.
-	if read == 0 {
-		os.Exit(0)
+	fmt.Println(len(buf), n)
+	if n == 0 {
+		return errutil.NewNoPos("EOF")
 	}
+
 	// The x scale is relative to the number of frames.
-	xscale := len(frames) / width
+	xscale := len(buf) / width
 
 	// The y scale is relative to the range of values from the frames.
-	yscale := Range(frames) / height
+	yscale := Range(buf) / height
 
+	i := image.NewRGBA(image.Rect(0, 0, width, height))
 	draw.Draw(i, i.Bounds(), &image.Uniform{black}, image.ZP, draw.Src)
 
 	oldx, oldy := 0, height/2
 	for x := 0; x < width; x += 2 {
 		// loudness from the frame scaled down to the image.
-		loudness := int(frames[x*xscale]) / yscale
+		loudness := int(buf[x*xscale]) / (yscale + 1)
 
 		// To center the oscilloscope on the y axis we add height/2.
 		y := loudness + height/2
@@ -136,7 +138,6 @@ func update(samplerate int32, i *image.RGBA, f *snd.File) error {
 	if err != nil {
 		return errutil.Err(err)
 	}
-
 	// Draw image to window.
 	err = win.Draw(image.ZP, img)
 	if err != nil {
@@ -155,8 +156,8 @@ func line(i *image.RGBA, x, y, x0, y0 int) {
 	gc.Stroke()
 }
 
-func Range(frames []int32) int {
-	var max, min int32 = 0, 0
+func Range(frames audio.PCM32Samples) int {
+	var max, min audio.PCM32 = 0, 0
 	for _, frame := range frames {
 		if frame > max {
 			max = frame
@@ -164,8 +165,9 @@ func Range(frames []int32) int {
 			min = frame
 		}
 	}
+	return int(max - min)
+	// return int(2 * max)
 	// return int(max - min)
-	return int(2 * max)
 }
 
 func usage() {
@@ -177,7 +179,7 @@ func usage() {
 func main() {
 	// The audio library is automatically initialized when imported. Quit the
 	// audio library on return.
-	defer audio.Quit()
+	defer sdlaudio.Quit()
 
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
