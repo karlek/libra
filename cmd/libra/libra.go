@@ -1,3 +1,4 @@
+// Libra is program to visualize audio data.
 package main
 
 import (
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"azul3d.org/audio.v1"
+	_ "azul3d.org/audio/flac.v0"
 	_ "azul3d.org/audio/wav.v1"
 	"code.google.com/p/draw2d/draw2d"
 	"github.com/mewkiz/pkg/errutil"
@@ -23,16 +25,16 @@ import (
 
 const (
 	// TODO(karlek): make width and height into flags.
-	width, height = 600, 400
+	width, height = 800, 800
 
-	fps = 60
+	fps = 30
 )
 
 var (
 	black = color.RGBA{0, 0, 0, 255}
 )
 
-func play(filename string) {
+func play(filename string, end chan bool) {
 	// Load the sound file.
 	s, err := sdlaudio.Open(filename)
 	if err != nil {
@@ -46,7 +48,7 @@ func play(filename string) {
 	}
 
 	// Wait until the sound has reached the end.
-	<-snd.End
+	end <- <-snd.End
 }
 
 func oscilloscope(filename string) (err error) {
@@ -64,18 +66,19 @@ func oscilloscope(filename string) (err error) {
 	defer f.Close()
 	br := bufio.NewReader(f)
 
-	dec, magic, err := audio.NewDecoder(br)
+	dec, _, err := audio.NewDecoder(br)
 	if err != nil {
 		return err
 	}
-	fmt.Println("magic:", magic)
 
 	// Info about the sound, number of samples, sample rate etc.
 	conf := dec.Config()
 	fmt.Println(conf)
 
+	end := make(chan bool)
+
 	// Play the music.
-	go play(filename)
+	go play(filename, end)
 
 	nsamples := conf.Channels * conf.SampleRate
 	buf := make(audio.PCM32Samples, nsamples/fps)
@@ -84,6 +87,9 @@ func oscilloscope(filename string) (err error) {
 	for {
 		err := update(buf, dec)
 		if err != nil {
+			if err == audio.EOS {
+				break
+			}
 			return errutil.Err(err)
 		}
 
@@ -96,6 +102,8 @@ func oscilloscope(filename string) (err error) {
 		}
 		time.Sleep(time.Second / (fps * 2))
 	}
+	<-end
+	os.Exit(0)
 	return nil
 }
 
@@ -104,7 +112,6 @@ func update(buf audio.PCM32Samples, dec audio.Decoder) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(len(buf), n)
 	if n == 0 {
 		return errutil.NewNoPos("EOF")
 	}
@@ -117,6 +124,7 @@ func update(buf audio.PCM32Samples, dec audio.Decoder) error {
 
 	i := image.NewRGBA(image.Rect(0, 0, width, height))
 	draw.Draw(i, i.Bounds(), &image.Uniform{black}, image.ZP, draw.Src)
+	gc := draw2d.NewGraphicContext(i)
 
 	oldx, oldy := 0, height/2
 	for x := 0; x < width; x += 2 {
@@ -127,7 +135,7 @@ func update(buf audio.PCM32Samples, dec audio.Decoder) error {
 		y := loudness + height/2
 
 		// draw a line between (x, y) and (oldx, oldy)
-		line(i, x, y, oldx, oldy)
+		line(gc, x, y, oldx, oldy)
 
 		// Update old x/y.
 		oldx, oldy = x, y
@@ -148,8 +156,7 @@ func update(buf audio.PCM32Samples, dec audio.Decoder) error {
 	return win.Update()
 }
 
-func line(i *image.RGBA, x, y, x0, y0 int) {
-	gc := draw2d.NewGraphicContext(i)
+func line(gc draw2d.GraphicContext, x, y, x0, y0 int) {
 	gc.SetStrokeColor(color.RGBA{0xff, 0xff, 0xff, 0xff})
 	gc.MoveTo(float64(x), float64(y))
 	gc.LineTo(float64(x0), float64(y0))
